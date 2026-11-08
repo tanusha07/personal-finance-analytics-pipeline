@@ -1,53 +1,53 @@
 import pandas as pd
-import psycopg2
-from prophet import Prophet
 
-# Connect to Postgres
-conn = psycopg2.connect(
-    host="localhost",
-    port="5432",
-    dbname="expense_tracker",
-    user="tracker",
-    password="tracker_pass"
-)
+from db import get_connection
 
-# Pull cleaned data, only expenses
-df = pd.read_sql("SELECT * FROM cleaned_transactions WHERE txn_type = 'Expense'", conn)
 
-# Group spending by day, since Prophet wants one total per date
-daily = df.groupby("date")["amount"].sum().reset_index()
+def prepare_daily(df):
+    """Total expense per day, in the ds/y column format Prophet expects."""
+    daily = df.groupby("date")["amount"].sum().reset_index()
+    return daily.rename(columns={"date": "ds", "amount": "y"})
 
-# Prophet requires specific column names: ds (date) and y (value)
-daily = daily.rename(columns={"date": "ds", "amount": "y"})
 
-# Build and train the forecasting model
-model = Prophet()
-model.fit(daily)
+def build_forecast(df, periods=30):
+    """Fit Prophet on daily expense totals and return the next `periods` days (ds, yhat)."""
+    from prophet import Prophet  # imported here so the rest of the module works without Prophet
 
-# Ask it to predict 30 days into the future
-future = model.make_future_dataframe(periods=30)
-forecast = model.predict(future)
+    daily = prepare_daily(df)
+    model = Prophet()
+    model.fit(daily)
+    future = model.make_future_dataframe(periods=periods)
+    forecast = model.predict(future)
+    return forecast[["ds", "yhat"]].tail(periods)
 
-# Save the forecast results to a new table
-cur = conn.cursor()
-cur.execute("""
-    CREATE TABLE IF NOT EXISTS spending_forecast (
-        id SERIAL PRIMARY KEY,
-        date DATE,
-        predicted_amount NUMERIC(10,2)
-    )
-""")
-cur.execute("TRUNCATE TABLE spending_forecast")
-conn.commit()
 
-for _, row in forecast[["ds", "yhat"]].tail(30).iterrows():
-    cur.execute(
-        "INSERT INTO spending_forecast (date, predicted_amount) VALUES (%s, %s)",
-        (row["ds"].date(), round(row["yhat"], 2))
-    )
+def main():
+    conn = get_connection()
+    df = pd.read_sql("SELECT * FROM cleaned_transactions WHERE txn_type = 'Expense'", conn)
+    next_30 = build_forecast(df, periods=30)
 
-conn.commit()
-cur.close()
-conn.close()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS spending_forecast (
+            id SERIAL PRIMARY KEY,
+            date DATE,
+            predicted_amount NUMERIC(10,2)
+        )
+    """)
+    cur.execute("TRUNCATE TABLE spending_forecast")
+    conn.commit()
 
-print("Forecast saved for the next 30 days")
+    for _, row in next_30.iterrows():
+        cur.execute(
+            "INSERT INTO spending_forecast (date, predicted_amount) VALUES (%s, %s)",
+            (row["ds"].date(), round(row["yhat"], 2))
+        )
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    print("Forecast saved for the next 30 days")
+
+
+if __name__ == "__main__":
+    main()
