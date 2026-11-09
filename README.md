@@ -77,3 +77,7 @@ airflow/                                               Airflow compose file and 
 powerbi/                                               KPI measures and dashboard setup
 tests/                                                 pytest suite
 ```
+
+## Dashboard
+
+![Personal Finance KPI Dashboard](docs/kpi_dashboard.png)
